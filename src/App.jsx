@@ -5,22 +5,26 @@ import {
   Code2, Palette, Briefcase, Video, PenTool, Camera, LogOut, Check, Mail,
   ShieldCheck, Users, TrendingUp, Pencil, Settings, Globe, Moon, Sun, Bell,
 } from "lucide-react";
+import {
+  onAuthStateChanged, signInWithPopup, signOut,
+  createUserWithEmailAndPassword, signInWithEmailAndPassword,
+} from "firebase/auth";
+import {
+  doc, getDoc, setDoc, updateDoc, addDoc, collection, query, orderBy,
+  onSnapshot, arrayUnion, arrayRemove,
+} from "firebase/firestore";
+import { auth, db, googleProvider } from "./firebase.js";
 
-/* Real browser storage, same shape as Claude's artifact window.storage API
-   (get() rejects on a missing key, matching the original code's try/catch usage). */
-const storage = {
-  async get(key) {
-    const value = localStorage.getItem(key);
-    if (value === null) throw new Error("not found");
-    return { key, value, shared: false };
+/* Local-only UI preferences (theme, language, notification toggles) — everything
+   else (profile, posts, comments, projects, following) now lives in Firebase. */
+const prefsStorage = {
+  load() {
+    try { return JSON.parse(localStorage.getItem("celiann-prefs") || "{}"); }
+    catch (e) { return {}; }
   },
-  async set(key, value) {
-    localStorage.setItem(key, value);
-    return { key, value, shared: false };
-  },
-  async delete(key) {
-    localStorage.removeItem(key);
-    return { key, deleted: true, shared: false };
+  save(prefs) {
+    try { localStorage.setItem("celiann-prefs", JSON.stringify(prefs)); }
+    catch (e) {}
   },
 };
 
@@ -103,6 +107,13 @@ const STRINGS = {
     suggest_title: "Gente que te podría interesar", suggest_subtitle: "Según con quién quieres colaborar",
     suggest_continue: "Continuar", suggest_skip: "Omitir por ahora",
     share_copy: "Compartir", share_copied: "¡Enlace copiado!",
+    auth_password_ph: "Contraseña",
+    auth_toggle_to_login: "¿Ya tienes cuenta? Inicia sesión", auth_toggle_to_signup: "¿Cuenta nueva? Regístrate",
+    auth_login_button: "Iniciar sesión", auth_signup_button: "Crear cuenta",
+    auth_error_generic: "Algo salió mal. Intenta de nuevo.",
+    auth_error_wrong_password: "Correo o contraseña incorrectos.",
+    auth_error_email_in_use: "Ese correo ya tiene una cuenta. Intenta iniciar sesión.",
+    auth_error_weak_password: "La contraseña debe tener al menos 6 caracteres.",
   },
   en: {
     nav_feed: "Feed", nav_search: "Search", nav_chat: "Chats", nav_profile: "Profile", nav_settings: "Settings",
@@ -176,6 +187,13 @@ const STRINGS = {
     suggest_title: "People you might like", suggest_subtitle: "Based on who you want to collaborate with",
     suggest_continue: "Continue", suggest_skip: "Skip for now",
     share_copy: "Share", share_copied: "Link copied!",
+    auth_password_ph: "Password",
+    auth_toggle_to_login: "Already have an account? Log in", auth_toggle_to_signup: "New here? Sign up",
+    auth_login_button: "Log in", auth_signup_button: "Create account",
+    auth_error_generic: "Something went wrong. Try again.",
+    auth_error_wrong_password: "Wrong email or password.",
+    auth_error_email_in_use: "That email already has an account. Try logging in.",
+    auth_error_weak_password: "Password must be at least 6 characters.",
   },
   fr: {
     nav_feed: "Fil", nav_search: "Rechercher", nav_chat: "Messages", nav_profile: "Profil", nav_settings: "Réglages",
@@ -249,6 +267,13 @@ const STRINGS = {
     suggest_title: "Des personnes qui pourraient t'intéresser", suggest_subtitle: "Selon avec qui tu veux collaborer",
     suggest_continue: "Continuer", suggest_skip: "Ignorer pour l'instant",
     share_copy: "Partager", share_copied: "Lien copié !",
+    auth_password_ph: "Mot de passe",
+    auth_toggle_to_login: "Tu as déjà un compte ? Connecte-toi", auth_toggle_to_signup: "Nouveau ici ? Inscris-toi",
+    auth_login_button: "Se connecter", auth_signup_button: "Créer un compte",
+    auth_error_generic: "Une erreur est survenue. Réessaie.",
+    auth_error_wrong_password: "E-mail ou mot de passe incorrect.",
+    auth_error_email_in_use: "Ce compte existe déjà. Essaie de te connecter.",
+    auth_error_weak_password: "Le mot de passe doit contenir au moins 6 caractères.",
   },
   pt: {
     nav_feed: "Feed", nav_search: "Buscar", nav_chat: "Chats", nav_profile: "Perfil", nav_settings: "Ajustes",
@@ -322,6 +347,13 @@ const STRINGS = {
     suggest_title: "Pessoas que podem te interessar", suggest_subtitle: "Com base em quem você quer colaborar",
     suggest_continue: "Continuar", suggest_skip: "Pular por agora",
     share_copy: "Compartilhar", share_copied: "Link copiado!",
+    auth_password_ph: "Senha",
+    auth_toggle_to_login: "Já tem conta? Entrar", auth_toggle_to_signup: "Novo por aqui? Criar conta",
+    auth_login_button: "Entrar", auth_signup_button: "Criar conta",
+    auth_error_generic: "Algo deu errado. Tente de novo.",
+    auth_error_wrong_password: "E-mail ou senha incorretos.",
+    auth_error_email_in_use: "Esse e-mail já tem conta. Tente entrar.",
+    auth_error_weak_password: "A senha precisa ter pelo menos 6 caracteres.",
   },
   zh: {
     nav_feed: "动态", nav_search: "搜索", nav_chat: "聊天", nav_profile: "个人主页", nav_settings: "设置",
@@ -395,6 +427,13 @@ const STRINGS = {
     suggest_title: "你可能感兴趣的人", suggest_subtitle: "根据你想合作的领域推荐",
     suggest_continue: "继续", suggest_skip: "暂时跳过",
     share_copy: "分享", share_copied: "链接已复制！",
+    auth_password_ph: "密码",
+    auth_toggle_to_login: "已有账号？登录", auth_toggle_to_signup: "新用户？注册",
+    auth_login_button: "登录", auth_signup_button: "创建账号",
+    auth_error_generic: "出了点问题，请重试。",
+    auth_error_wrong_password: "邮箱或密码不正确。",
+    auth_error_email_in_use: "该邮箱已注册，请尝试登录。",
+    auth_error_weak_password: "密码至少需要6个字符。",
   },
   ko: {
     nav_feed: "피드", nav_search: "검색", nav_chat: "채팅", nav_profile: "프로필", nav_settings: "설정",
@@ -468,6 +507,13 @@ const STRINGS = {
     suggest_title: "관심 있을 만한 사람들", suggest_subtitle: "협업하고 싶은 분야를 기준으로 추천해요",
     suggest_continue: "계속하기", suggest_skip: "나중에 하기",
     share_copy: "공유", share_copied: "링크가 복사되었어요!",
+    auth_password_ph: "비밀번호",
+    auth_toggle_to_login: "이미 계정이 있나요? 로그인", auth_toggle_to_signup: "처음이신가요? 가입하기",
+    auth_login_button: "로그인", auth_signup_button: "계정 만들기",
+    auth_error_generic: "문제가 발생했어요. 다시 시도해주세요.",
+    auth_error_wrong_password: "이메일 또는 비밀번호가 올바르지 않아요.",
+    auth_error_email_in_use: "이미 가입된 이메일이에요. 로그인해보세요.",
+    auth_error_weak_password: "비밀번호는 최소 6자 이상이어야 해요.",
   },
 };
 
@@ -710,10 +756,43 @@ function Logo({ dark = true }) {
 
 /* ---------------------------- auth + onboarding ---------------------------- */
 
-function AuthScreen({ onContinue }) {
+function AuthScreen() {
   const { t } = useApp();
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [checked, setChecked] = useState(false);
+  const [mode, setMode] = useState("signup"); // "signup" | "login"
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  function friendlyError(code) {
+    if (code === "auth/wrong-password" || code === "auth/invalid-credential" || code === "auth/user-not-found") return t("auth_error_wrong_password");
+    if (code === "auth/email-already-in-use") return t("auth_error_email_in_use");
+    if (code === "auth/weak-password") return t("auth_error_weak_password");
+    return t("auth_error_generic");
+  }
+
+  async function withGoogle() {
+    setError(""); setBusy(true);
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (e) {
+      setError(friendlyError(e.code));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function withEmail() {
+    setError(""); setBusy(true);
+    try {
+      if (mode === "signup") await createUserWithEmailAndPassword(auth, email, password);
+      else await signInWithEmailAndPassword(auth, email, password);
+    } catch (e) {
+      setError(friendlyError(e.code));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <div className="min-h-screen bg-slate-900 flex items-center justify-center p-6">
@@ -724,7 +803,7 @@ function AuthScreen({ onContinue }) {
         </div>
 
         <div className="bg-white rounded-2xl p-6 shadow-xl">
-          <button onClick={() => onContinue("Cuenta de Google")} className="w-full flex items-center justify-center gap-2 border border-slate-300 rounded-xl py-2.5 font-medium text-slate-700 hover:bg-slate-50 transition">
+          <button disabled={busy} onClick={withGoogle} className="w-full flex items-center justify-center gap-2 border border-slate-300 rounded-xl py-2.5 font-medium text-slate-700 hover:bg-slate-50 transition disabled:opacity-60">
             <Sparkles className="h-4 w-4 text-indigo-500" /> {t("auth_google")}
           </button>
 
@@ -734,22 +813,32 @@ function AuthScreen({ onContinue }) {
             <div className="h-px bg-slate-200 flex-1" />
           </div>
 
-          <div className="relative">
+          <div className="relative mb-2.5">
             <Mail className="h-4 w-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder={t("auth_email_placeholder")}
               className="w-full border border-slate-300 rounded-xl py-2.5 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
           </div>
+          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={t("auth_password_ph")}
+            className="w-full border border-slate-300 rounded-xl py-2.5 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
 
-          <label className="flex items-center gap-2 mt-4 text-sm text-slate-600 cursor-pointer select-none">
-            <span onClick={() => setChecked((c) => !c)} className={`h-5 w-5 rounded border flex items-center justify-center transition ${checked ? "bg-indigo-600 border-indigo-600" : "border-slate-300"}`}>
-              {checked && <Check className="h-3.5 w-3.5 text-white" />}
-            </span>
-            {t("auth_not_robot")}
-          </label>
+          {mode === "signup" && (
+            <label className="flex items-center gap-2 mt-4 text-sm text-slate-600 cursor-pointer select-none">
+              <span onClick={() => setChecked((c) => !c)} className={`h-5 w-5 rounded border flex items-center justify-center transition ${checked ? "bg-indigo-600 border-indigo-600" : "border-slate-300"}`}>
+                {checked && <Check className="h-3.5 w-3.5 text-white" />}
+              </span>
+              {t("auth_not_robot")}
+            </label>
+          )}
 
-          <button disabled={!checked || !email} onClick={() => onContinue(email)}
+          {error && <p className="text-xs text-rose-500 mt-3">{error}</p>}
+
+          <button disabled={busy || !email || !password || (mode === "signup" && !checked)} onClick={withEmail}
             className="w-full mt-4 bg-indigo-600 disabled:bg-slate-200 disabled:text-slate-400 text-white rounded-xl py-2.5 font-medium hover:bg-indigo-700 transition">
-            {t("auth_continue")}
+            {mode === "signup" ? t("auth_signup_button") : t("auth_login_button")}
+          </button>
+
+          <button onClick={() => { setMode(mode === "signup" ? "login" : "signup"); setError(""); }} className="w-full mt-3 text-sm text-indigo-600 py-1">
+            {mode === "signup" ? t("auth_toggle_to_login") : t("auth_toggle_to_signup")}
           </button>
         </div>
 
@@ -1040,7 +1129,7 @@ function Composer({ user, onPost }) {
     onPost({
       id: `p${Date.now()}`, author: { name: user.name, role: user.role, place: "Tu ubicación", verified: true },
       category, status, text, hashtags, link: link ? { title: link } : null,
-      likes: 0, comments: 0, createdAgo: "ahora",
+      likes: 0, comments: [], createdAgo: "ahora",
     });
     setText(""); setLink(""); setShowLink(false); setOpen(false);
   }
@@ -1467,7 +1556,7 @@ function ProjectComposer({ onCreate }) {
   );
 }
 
-function ProjectAgreement({ project, setProjects }) {
+function ProjectAgreement({ project, onUpdateProject }) {
   const { t, dark } = useApp();
   const participants = ["Tú", ...project.members];
   const splits = project.agreement.splits;
@@ -1476,13 +1565,13 @@ function ProjectAgreement({ project, setProjects }) {
   const iAccepted = accepted.includes("Tú");
 
   function setSplit(name, value) {
-    setProjects((prev) => prev.map((pr) => (pr.id === project.id ? { ...pr, agreement: { ...pr.agreement, splits: { ...pr.agreement.splits, [name]: value } } } : pr)));
+    onUpdateProject(project, (pr) => ({ ...pr, agreement: { ...pr.agreement, splits: { ...pr.agreement.splits, [name]: value } } }));
   }
   function setTerms(value) {
-    setProjects((prev) => prev.map((pr) => (pr.id === project.id ? { ...pr, agreement: { ...pr.agreement, terms: value } } : pr)));
+    onUpdateProject(project, (pr) => ({ ...pr, agreement: { ...pr.agreement, terms: value } }));
   }
   function accept() {
-    setProjects((prev) => prev.map((pr) => (pr.id === project.id ? { ...pr, agreement: { ...pr.agreement, accepted: [...new Set([...pr.agreement.accepted, "Tú"])] } } : pr)));
+    onUpdateProject(project, (pr) => ({ ...pr, agreement: { ...pr.agreement, accepted: [...new Set([...pr.agreement.accepted, "Tú"])] } }));
   }
 
   return (
@@ -1529,7 +1618,7 @@ function ProjectAgreement({ project, setProjects }) {
   );
 }
 
-function ProjectDetail({ project, setProjects, onBack, onOpenProfile, onNotify }) {
+function ProjectDetail({ project, onUpdateProject, onBack, onOpenProfile, onNotify }) {
   const { t, dark } = useApp();
   const [draft, setDraft] = useState("");
   const [showAgreement, setShowAgreement] = useState(false);
@@ -1541,24 +1630,21 @@ function ProjectDetail({ project, setProjects, onBack, onOpenProfile, onNotify }
   const candidates = Object.keys(AUTHOR_PROFILES).filter((n) => !project.members.includes(n));
   const Icon = catIcon(project.category);
 
-  function updateProject(fn) {
-    setProjects((prev) => prev.map((p) => (p.id === project.id ? fn(p) : p)));
-  }
   function send() {
     if (!draft.trim()) return;
-    updateProject((p) => ({ ...p, messages: [...p.messages, { id: Date.now(), from: "me", text: draft }] }));
+    onUpdateProject(project, (p) => ({ ...p, messages: [...p.messages, { id: Date.now(), from: "me", text: draft }] }));
     setDraft("");
     if (project.members.length > 0) {
       setTimeout(() => {
         const reply = AUTO_REPLIES[Math.floor(Math.random() * AUTO_REPLIES.length)];
         const from = project.members[Math.floor(Math.random() * project.members.length)];
-        updateProject((p) => ({ ...p, messages: [...p.messages, { id: Date.now() + 1, from, text: reply.translated }] }));
+        onUpdateProject(project, (p) => ({ ...p, messages: [...p.messages, { id: Date.now() + 1, from, text: reply.translated }] }));
         onNotify?.(tf(t, "notif_project_template", { title: project.title }));
       }, 1300);
     }
   }
   function addMember(name) {
-    updateProject((p) => ({ ...p, members: [...p.members, name] }));
+    onUpdateProject(project, (p) => ({ ...p, members: [...p.members, name] }));
     setShowAddMember(false);
   }
 
@@ -1605,7 +1691,7 @@ function ProjectDetail({ project, setProjects, onBack, onOpenProfile, onNotify }
         <button onClick={() => setShowAgreement((s) => !s)} className={`flex items-center gap-1.5 text-sm font-medium mt-3 ${showAgreement ? "text-indigo-600" : cx.muted(dark)}`}>
           <ShieldCheck className="h-4 w-4" /> {t("projects_agreement")}
         </button>
-        {showAgreement && <ProjectAgreement project={project} setProjects={setProjects} />}
+        {showAgreement && <ProjectAgreement project={project} onUpdateProject={onUpdateProject} />}
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -1635,18 +1721,25 @@ function ProjectDetail({ project, setProjects, onBack, onOpenProfile, onNotify }
   );
 }
 
-function ProjectsView({ projects, setProjects, activeId, setActiveId, onOpenProfile, onNotify }) {
+function ProjectsView({ projects, onUpdateProject, activeId, setActiveId, onOpenProfile, onNotify }) {
   const { t, dark } = useApp();
   const active = projects.find((p) => p.id === activeId);
 
-  function createProject({ title, description, category }) {
+  async function createProject({ title, description, category }) {
     const proj = {
-      id: `proj${Date.now()}`, title, description, category, status: "buscando",
+      title, description, category, status: "buscando",
       members: [], messages: [],
       agreement: { splits: { "Tú": 100 }, terms: "", accepted: [] },
+      createdAt: new Date().toISOString(),
     };
-    setProjects((prev) => [proj, ...prev]);
-    setActiveId(proj.id);
+    try {
+      const ref = await addDoc(collection(db, "projects"), proj);
+      setActiveId(ref.id);
+    } catch (e) {
+      // fall back to a local-only project if the write fails, so the UI still responds
+      const localId = `proj${Date.now()}`;
+      setActiveId(localId);
+    }
   }
 
   return (
@@ -1676,7 +1769,7 @@ function ProjectsView({ projects, setProjects, activeId, setActiveId, onOpenProf
       </div>
 
       {active ? (
-        <ProjectDetail project={active} setProjects={setProjects} onBack={() => setActiveId(null)} onOpenProfile={onOpenProfile} onNotify={onNotify} />
+        <ProjectDetail project={active} onUpdateProject={onUpdateProject} onBack={() => setActiveId(null)} onOpenProfile={onOpenProfile} onNotify={onNotify} />
       ) : (
         <div className={`hidden md:flex flex-1 items-center justify-center ${cx.faint(dark)}`}>
           <Users className="h-8 w-8" />
@@ -2126,15 +2219,14 @@ const SESSION_KEY = "celiann-session";
 export default function App() {
   const [checking, setChecking] = useState(true);
   const [stage, setStage] = useState("auth");
-  const [email, setEmail] = useState("");
   const [user, setUser] = useState(null);
   const [tab, setTab] = useState("feed");
   const [profileSubject, setProfileSubject] = useState(null);
   const [following, setFollowing] = useState([]);
-  const [posts, setPosts] = useState(INITIAL_POSTS);
+  const [posts, setPosts] = useState(INITIAL_POSTS.map((p) => ({ ...p, seed: true })));
   const [conversations, setConversations] = useState(CONVERSATIONS);
   const [activeConv, setActiveConv] = useState(null);
-  const [projects, setProjects] = useState(INITIAL_PROJECTS);
+  const [projects, setProjects] = useState(INITIAL_PROJECTS.map((p) => ({ ...p, seed: true })));
   const [activeProject, setActiveProject] = useState(null);
   const [stories, setStories] = useState(INITIAL_STORIES);
   const [viewerIndex, setViewerIndex] = useState(null);
@@ -2146,35 +2238,79 @@ export default function App() {
   const [lang, setLang] = useState("es");
   const [notifs, setNotifs] = useState({ collab: true, messages: true, mentions: false });
 
-  // Load any saved session once, on first mount, so returning users skip login.
+  // Local UI preferences only (theme, language, notification toggles) — loaded once.
   useEffect(() => {
-    (async () => {
-      try {
-        const res = await storage.get(SESSION_KEY);
-        const data = res?.value ? JSON.parse(res.value) : null;
-        if (data?.user) {
-          setUser(data.user);
-          setStage("app");
-          if (typeof data.dark === "boolean") setDark(data.dark);
-          if (data.lang) setLang(data.lang);
-          if (data.notifs) setNotifs(data.notifs);
-          if (Array.isArray(data.following)) setFollowing(data.following);
-          if (Array.isArray(data.posts)) setPosts(data.posts);
-          if (Array.isArray(data.projects)) setProjects(data.projects);
+    const p = prefsStorage.load();
+    if (typeof p.dark === "boolean") setDark(p.dark);
+    if (p.lang) setLang(p.lang);
+    if (p.notifs) setNotifs(p.notifs);
+  }, []);
+  useEffect(() => {
+    prefsStorage.save({ dark, lang, notifs });
+  }, [dark, lang, notifs]);
+
+  // Real Firebase session: fires immediately with the restored user on reload, or null if logged out.
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (fbUser) => {
+      if (fbUser) {
+        try {
+          const snap = await getDoc(doc(db, "users", fbUser.uid));
+          if (snap.exists()) {
+            setUser({ uid: fbUser.uid, ...snap.data() });
+            setStage("app");
+          } else {
+            setUser({ uid: fbUser.uid, email: fbUser.email || "" });
+            setStage("onboarding");
+          }
+        } catch (e) {
+          setUser({ uid: fbUser.uid, email: fbUser.email || "" });
+          setStage("onboarding");
         }
-      } catch (err) {
-        // no saved session yet — that's fine, show the login screen
-      } finally {
-        setChecking(false);
+      } else {
+        setUser(null);
+        setStage("auth");
+        setTab("feed");
+        setProfileSubject(null);
+        setNotifications([]);
       }
-    })();
+      setChecking(false);
+    });
+    return unsub;
   }, []);
 
-  // Save the session whenever the important bits change, while logged in.
+  // Live shared posts, blended with local demo content.
   useEffect(() => {
-    if (!user) return;
-    storage.set(SESSION_KEY, JSON.stringify({ user, dark, lang, notifs, following, posts, projects })).catch(() => {});
-  }, [user, dark, lang, notifs, following, posts, projects]);
+    if (!user?.uid) return;
+    const q = query(collection(db, "posts"), orderBy("createdAt", "desc"));
+    const unsub = onSnapshot(
+      q,
+      (snap) => setPosts([...snap.docs.map((d) => ({ id: d.id, ...d.data(), seed: false })), ...INITIAL_POSTS.map((p) => ({ ...p, seed: true }))]),
+      () => setPosts(INITIAL_POSTS.map((p) => ({ ...p, seed: true })))
+    );
+    return unsub;
+  }, [user?.uid]);
+
+  // Live shared group projects, blended with the local demo project.
+  useEffect(() => {
+    if (!user?.uid) return;
+    const unsub = onSnapshot(
+      collection(db, "projects"),
+      (snap) => setProjects([...snap.docs.map((d) => ({ id: d.id, ...d.data(), seed: false })), ...INITIAL_PROJECTS.map((p) => ({ ...p, seed: true }))]),
+      () => setProjects(INITIAL_PROJECTS.map((p) => ({ ...p, seed: true })))
+    );
+    return unsub;
+  }, [user?.uid]);
+
+  // Live "who I follow", shared across devices.
+  useEffect(() => {
+    if (!user?.uid) { setFollowing([]); return; }
+    const unsub = onSnapshot(
+      doc(db, "following", user.uid),
+      (snap) => setFollowing(snap.exists() ? (snap.data().names || []) : []),
+      () => setFollowing([])
+    );
+    return unsub;
+  }, [user?.uid]);
 
   // One sample "new collaboration" notification, once per session, so the feature is visible even for a fresh account.
   useEffect(() => {
@@ -2204,19 +2340,55 @@ export default function App() {
     setProfileSubject(name === user?.name ? null : name);
     setTab("profile");
   }
-  function handleAddComment(postId, text) {
-    setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, comments: [...p.comments, { id: `c${Date.now()}`, author: user.name, text }] } : p)));
+
+  // Writes user profile changes to Firestore too — pass this in place of the raw setUser everywhere in the tree.
+  function updateUser(updaterOrValue) {
+    setUser((prev) => {
+      const next = typeof updaterOrValue === "function" ? updaterOrValue(prev) : updaterOrValue;
+      if (next?.uid) setDoc(doc(db, "users", next.uid), next, { merge: true }).catch(() => {});
+      return next;
+    });
   }
-  function handleCreatePost(post) {
-    setPosts((prev) => [post, ...prev]);
-    setTimeout(() => {
-      const others = Object.keys(AUTHOR_PROFILES).filter((n) => n !== user.name);
-      const name = others[Math.floor(Math.random() * others.length)];
-      const commentTexts = ["¡Me encanta esta idea!", "Cuenta conmigo si necesitas ayuda.", "Justo lo que estaba buscando, te escribo."];
-      const text = commentTexts[Math.floor(Math.random() * commentTexts.length)];
-      setPosts((prev) => prev.map((p) => (p.id === post.id ? { ...p, comments: [...p.comments, { id: `c${Date.now()}`, author: name, text }] } : p)));
-      pushNotification("mentions", tf(t, "notif_comment_template", { name }));
-    }, 5000);
+  // Writes the following list to Firestore too — pass this in place of the raw setFollowing everywhere in the tree.
+  function updateFollowing(updaterOrValue) {
+    setFollowing((prev) => {
+      const next = typeof updaterOrValue === "function" ? updaterOrValue(prev) : updaterOrValue;
+      if (user?.uid) setDoc(doc(db, "following", user.uid), { names: next }, { merge: true }).catch(() => {});
+      return next;
+    });
+  }
+  // Local-only edits for demo/seed projects; real Firestore writes (shared with everyone) for real ones.
+  function updateProjectDoc(project, fn) {
+    const updated = fn(project);
+    setProjects((prev) => prev.map((p) => (p.id === project.id ? updated : p)));
+    if (!project.seed) setDoc(doc(db, "projects", project.id), updated).catch(() => {});
+  }
+  async function handleAddComment(postId, text) {
+    const post = posts.find((p) => p.id === postId);
+    if (!post) return;
+    const comment = { id: `c${Date.now()}`, author: user.name, text };
+    if (post.seed) {
+      setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, comments: [...p.comments, comment] } : p)));
+    } else {
+      try { await updateDoc(doc(db, "posts", postId), { comments: arrayUnion(comment) }); }
+      catch (e) { setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, comments: [...p.comments, comment] } : p))); }
+    }
+  }
+  async function handleCreatePost(post) {
+    const { id, ...rest } = post;
+    try {
+      const ref = await addDoc(collection(db, "posts"), { ...rest, authorUid: user.uid, createdAt: new Date().toISOString() });
+      setTimeout(async () => {
+        const others = Object.keys(AUTHOR_PROFILES).filter((n) => n !== user.name);
+        const name = others[Math.floor(Math.random() * others.length)];
+        const commentTexts = ["¡Me encanta esta idea!", "Cuenta conmigo si necesitas ayuda.", "Justo lo que estaba buscando, te escribo."];
+        const text = commentTexts[Math.floor(Math.random() * commentTexts.length)];
+        try { await updateDoc(ref, { comments: arrayUnion({ id: `c${Date.now()}`, author: name, text }) }); } catch (e) {}
+        pushNotification("mentions", tf(t, "notif_comment_template", { name }));
+      }, 5000);
+    } catch (e) {
+      setPosts((prev) => [{ ...post, seed: false }, ...prev]);
+    }
   }
   function handleOpenNotif(n) {
     setNotifications((prev) => prev.map((x) => (x.id === n.id ? { ...x, read: true } : x)));
@@ -2228,8 +2400,7 @@ export default function App() {
     if (id === "profile") setProfileSubject(null);
   }
   function handleLogout() {
-    storage.delete(SESSION_KEY).catch(() => {});
-    setStage("auth"); setUser(null); setTab("feed"); setProfileSubject(null); setFollowing([]); setNotifications([]);
+    signOut(auth).catch(() => {});
   }
 
   if (checking) {
@@ -2255,10 +2426,17 @@ export default function App() {
           .overlay-strong { background-color: rgba(0,0,0,0.9); }
         `}</style>
 
-        {stage === "auth" && <AuthScreen onContinue={(e) => { setEmail(e); setStage("onboarding"); }} />}
-        {stage === "onboarding" && <OnboardingScreen email={email} onDone={(u) => { setUser(u); setStage("suggestions"); }} />}
+        {stage === "auth" && <AuthScreen />}
+        {stage === "onboarding" && (
+          <OnboardingScreen email={user?.email || ""} onDone={(u) => {
+            const profile = { ...u, uid: user.uid, email: user.email || "" };
+            setDoc(doc(db, "users", user.uid), profile).catch(() => {});
+            setUser(profile);
+            setStage("suggestions");
+          }} />
+        )}
         {stage === "suggestions" && (
-          <SuggestionsScreen user={user} following={following} setFollowing={setFollowing} onContinue={() => setStage("app")} />
+          <SuggestionsScreen user={user} following={following} setFollowing={updateFollowing} onContinue={() => setStage("app")} />
         )}
 
         {stage === "app" && user && (
@@ -2279,11 +2457,11 @@ export default function App() {
                       onNotify={(text) => pushNotification("messages", text, () => { setTab("chat"); })} />
                   )}
                   {tab === "projects" && (
-                    <ProjectsView projects={projects} setProjects={setProjects} activeId={activeProject} setActiveId={setActiveProject} onOpenProfile={handleOpenProfile}
+                    <ProjectsView projects={projects} onUpdateProject={updateProjectDoc} activeId={activeProject} setActiveId={setActiveProject} onOpenProfile={handleOpenProfile}
                       onNotify={(text) => pushNotification("messages", text, () => { setTab("projects"); })} />
                   )}
                   {tab === "profile" && (
-                    <ProfileView subjectName={profileSubject} user={user} setUser={setUser} following={following} setFollowing={setFollowing}
+                    <ProfileView subjectName={profileSubject} user={user} setUser={updateUser} following={following} setFollowing={updateFollowing}
                       onOpenChat={handleOpenChat} onBackToMe={() => setProfileSubject(null)} />
                   )}
                   {tab === "settings" && <SettingsView onLogout={handleLogout} />}
