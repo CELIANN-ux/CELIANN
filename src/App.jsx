@@ -7,13 +7,14 @@ import {
 } from "lucide-react";
 import {
   onAuthStateChanged, signInWithPopup, signOut,
-  createUserWithEmailAndPassword, signInWithEmailAndPassword,
+  createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail,
 } from "firebase/auth";
 import {
-  doc, getDoc, setDoc, updateDoc, addDoc, collection, query, orderBy,
+  doc, getDoc, setDoc, updateDoc, addDoc, collection, query, orderBy, where,
   onSnapshot, arrayUnion, arrayRemove,
 } from "firebase/firestore";
-import { auth, db, googleProvider } from "./firebase.js";
+import { ref as storageRef, uploadString, getDownloadURL } from "firebase/storage";
+import { auth, db, storage, googleProvider } from "./firebase.js";
 
 /* Local-only UI preferences (theme, language, notification toggles) — everything
    else (profile, posts, comments, projects, following) now lives in Firebase. */
@@ -114,6 +115,10 @@ const STRINGS = {
     auth_error_wrong_password: "Correo o contraseña incorrectos.",
     auth_error_email_in_use: "Ese correo ya tiene una cuenta. Intenta iniciar sesión.",
     auth_error_weak_password: "La contraseña debe tener al menos 6 caracteres.",
+    auth_forgot_password: "¿Olvidaste tu contraseña?",
+    auth_reset_sent: "Te mandamos un link a tu correo para crear una nueva contraseña.",
+    auth_reset_need_email: "Escribe tu correo arriba primero.",
+    search_people: "Personas",
   },
   en: {
     nav_feed: "Feed", nav_search: "Search", nav_chat: "Chats", nav_profile: "Profile", nav_settings: "Settings",
@@ -194,6 +199,10 @@ const STRINGS = {
     auth_error_wrong_password: "Wrong email or password.",
     auth_error_email_in_use: "That email already has an account. Try logging in.",
     auth_error_weak_password: "Password must be at least 6 characters.",
+    auth_forgot_password: "Forgot your password?",
+    auth_reset_sent: "We sent a link to your email to set a new password.",
+    auth_reset_need_email: "Type your email above first.",
+    search_people: "People",
   },
   fr: {
     nav_feed: "Fil", nav_search: "Rechercher", nav_chat: "Messages", nav_profile: "Profil", nav_settings: "Réglages",
@@ -274,6 +283,10 @@ const STRINGS = {
     auth_error_wrong_password: "E-mail ou mot de passe incorrect.",
     auth_error_email_in_use: "Ce compte existe déjà. Essaie de te connecter.",
     auth_error_weak_password: "Le mot de passe doit contenir au moins 6 caractères.",
+    auth_forgot_password: "Mot de passe oublié ?",
+    auth_reset_sent: "On t'a envoyé un lien par e-mail pour créer un nouveau mot de passe.",
+    auth_reset_need_email: "Écris d'abord ton e-mail ci-dessus.",
+    search_people: "Personnes",
   },
   pt: {
     nav_feed: "Feed", nav_search: "Buscar", nav_chat: "Chats", nav_profile: "Perfil", nav_settings: "Ajustes",
@@ -354,6 +367,10 @@ const STRINGS = {
     auth_error_wrong_password: "E-mail ou senha incorretos.",
     auth_error_email_in_use: "Esse e-mail já tem conta. Tente entrar.",
     auth_error_weak_password: "A senha precisa ter pelo menos 6 caracteres.",
+    auth_forgot_password: "Esqueceu sua senha?",
+    auth_reset_sent: "Enviamos um link para o seu e-mail para criar uma nova senha.",
+    auth_reset_need_email: "Digite seu e-mail acima primeiro.",
+    search_people: "Pessoas",
   },
   zh: {
     nav_feed: "动态", nav_search: "搜索", nav_chat: "聊天", nav_profile: "个人主页", nav_settings: "设置",
@@ -434,6 +451,10 @@ const STRINGS = {
     auth_error_wrong_password: "邮箱或密码不正确。",
     auth_error_email_in_use: "该邮箱已注册，请尝试登录。",
     auth_error_weak_password: "密码至少需要6个字符。",
+    auth_forgot_password: "忘记密码了？",
+    auth_reset_sent: "我们已经把重置密码的链接发送到你的邮箱。",
+    auth_reset_need_email: "请先在上面填写你的邮箱。",
+    search_people: "用户",
   },
   ko: {
     nav_feed: "피드", nav_search: "검색", nav_chat: "채팅", nav_profile: "프로필", nav_settings: "설정",
@@ -514,6 +535,10 @@ const STRINGS = {
     auth_error_wrong_password: "이메일 또는 비밀번호가 올바르지 않아요.",
     auth_error_email_in_use: "이미 가입된 이메일이에요. 로그인해보세요.",
     auth_error_weak_password: "비밀번호는 최소 6자 이상이어야 해요.",
+    auth_forgot_password: "비밀번호를 잊으셨나요?",
+    auth_reset_sent: "새 비밀번호를 설정할 수 있는 링크를 이메일로 보내드렸어요.",
+    auth_reset_need_email: "먼저 위에 이메일을 입력해주세요.",
+    search_people: "사람",
   },
 };
 
@@ -560,6 +585,13 @@ const STATUS_COLORS = {
 };
 
 const AVATAR_COLORS = ["bg-indigo-500", "bg-amber-500", "bg-teal-500", "bg-rose-500", "bg-sky-500", "bg-violet-500"];
+
+/* Uploads a data-URL image (from FileReader) to Firebase Storage and returns its public URL. */
+async function uploadImage(dataUrl, path) {
+  const ref = storageRef(storage, path);
+  await uploadString(ref, dataUrl, "data_url");
+  return getDownloadURL(ref);
+}
 
 function colorFor(name) {
   const sum = [...(name || "?")].reduce((a, c) => a + c.charCodeAt(0), 0);
@@ -763,6 +795,7 @@ function AuthScreen() {
   const [checked, setChecked] = useState(false);
   const [mode, setMode] = useState("signup"); // "signup" | "login"
   const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
   const [busy, setBusy] = useState(false);
 
   function friendlyError(code) {
@@ -787,6 +820,19 @@ function AuthScreen() {
     try {
       if (mode === "signup") await createUserWithEmailAndPassword(auth, email, password);
       else await signInWithEmailAndPassword(auth, email, password);
+    } catch (e) {
+      setError(friendlyError(e.code));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function forgotPassword() {
+    setError(""); setInfo("");
+    if (!email) { setError(t("auth_reset_need_email")); return; }
+    setBusy(true);
+    try {
+      await sendPasswordResetEmail(auth, email);
+      setInfo(t("auth_reset_sent"));
     } catch (e) {
       setError(friendlyError(e.code));
     } finally {
@@ -830,14 +876,21 @@ function AuthScreen() {
             </label>
           )}
 
+          {mode === "login" && (
+            <button onClick={forgotPassword} className="w-full text-right text-xs text-indigo-600 mt-1.5">
+              {t("auth_forgot_password")}
+            </button>
+          )}
+
           {error && <p className="text-xs text-rose-500 mt-3">{error}</p>}
+          {info && <p className="text-xs text-teal-600 mt-3">{info}</p>}
 
           <button disabled={busy || !email || !password || (mode === "signup" && !checked)} onClick={withEmail}
             className="w-full mt-4 bg-indigo-600 disabled:bg-slate-200 disabled:text-slate-400 text-white rounded-xl py-2.5 font-medium hover:bg-indigo-700 transition">
             {mode === "signup" ? t("auth_signup_button") : t("auth_login_button")}
           </button>
 
-          <button onClick={() => { setMode(mode === "signup" ? "login" : "signup"); setError(""); }} className="w-full mt-3 text-sm text-indigo-600 py-1">
+          <button onClick={() => { setMode(mode === "signup" ? "login" : "signup"); setError(""); setInfo(""); }} className="w-full mt-3 text-sm text-indigo-600 py-1">
             {mode === "signup" ? t("auth_toggle_to_login") : t("auth_toggle_to_signup")}
           </button>
         </div>
@@ -848,13 +901,15 @@ function AuthScreen() {
   );
 }
 
-function OnboardingScreen({ email, onDone }) {
+function OnboardingScreen({ email, uid, onDone }) {
   const { t } = useApp();
   const [name, setName] = useState("");
   const [role, setRole] = useState("");
   const [bio, setBio] = useState("");
   const [looking, setLooking] = useState([]);
+  const [avatarPreview, setAvatarPreview] = useState(null);
   const [avatarUrl, setAvatarUrl] = useState(null);
+  const [uploading, setUploading] = useState(false);
   const fileRef = useRef(null);
 
   function toggleLooking(id) { setLooking((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id])); }
@@ -862,10 +917,21 @@ function OnboardingScreen({ email, onDone }) {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => setAvatarUrl(reader.result);
+    reader.onload = async () => {
+      setAvatarPreview(reader.result);
+      setUploading(true);
+      try {
+        const url = await uploadImage(reader.result, `avatars/${uid}-${Date.now()}.jpg`);
+        setAvatarUrl(url);
+      } catch (err) {
+        setAvatarUrl(reader.result); // keep working even if Storage isn't reachable
+      } finally {
+        setUploading(false);
+      }
+    };
     reader.readAsDataURL(file);
   }
-  const canSubmit = name.trim() && role.trim() && looking.length > 0;
+  const canSubmit = name.trim() && role.trim() && looking.length > 0 && !uploading;
 
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
@@ -876,7 +942,7 @@ function OnboardingScreen({ email, onDone }) {
         </p>
 
         <div className="flex items-center gap-4 mt-6">
-          <Avatar name={name || "?"} size="xl" imageUrl={avatarUrl} />
+          <Avatar name={name || "?"} size="xl" imageUrl={avatarPreview} />
           <div>
             <input ref={fileRef} type="file" accept="image/*" onChange={handleFile} className="hidden" />
             <button onClick={() => fileRef.current?.click()} className="flex items-center gap-2 text-sm font-medium text-indigo-600 border border-indigo-200 rounded-lg px-3 py-1.5 hover:bg-indigo-50 transition">
@@ -1215,11 +1281,11 @@ function PostCard({ post, onOpenChat, onOpenProfile, onAddComment, user, matches
   return (
     <div className={`border rounded-xl p-4 mb-4 ${cx.surface(dark)}`}>
       <div className="flex items-start gap-3">
-        <button onClick={() => onOpenProfile(post.author.name)} className="shrink-0">
+        <button onClick={() => onOpenProfile(post.author.name, post.authorUid)} className="shrink-0">
           <Avatar name={post.author.name} available={availabilityFor(post.author.name, user)} />
         </button>
         <div className="flex-1 min-w-0">
-          <button onClick={() => onOpenProfile(post.author.name)} className="flex items-center gap-1.5 flex-wrap hover:underline">
+          <button onClick={() => onOpenProfile(post.author.name, post.authorUid)} className="flex items-center gap-1.5 flex-wrap hover:underline">
             <span className="font-semibold text-sm">{post.author.name}</span>
             {post.author.verified && <BadgeCheck className="h-4 w-4 text-teal-500" />}
             <span className={`text-xs no-underline ${cx.faint(dark)}`}>· {post.createdAgo}</span>
@@ -1327,7 +1393,7 @@ function FeedView({ user, posts, onCreatePost, onOpenChat, onOpenProfile, onAddC
 
 /* ---------------------------- search ---------------------------- */
 
-function SearchView({ posts, onOpenChat, onOpenProfile, onAddComment, user }) {
+function SearchView({ posts, realUsers, onOpenChat, onOpenProfile, onAddComment, user }) {
   const { t, dark } = useApp();
   const [query, setQuery] = useState("");
   const [cat, setCat] = useState(null);
@@ -1337,8 +1403,10 @@ function SearchView({ posts, onOpenChat, onOpenProfile, onAddComment, user }) {
   const regions = [...new Set(posts.map((p) => regionOf(p.author.place)))];
   const langsPresent = [...new Set(posts.map((p) => AUTHOR_PROFILES[p.author.name]?.spokenLang).filter(Boolean))];
 
+  const q = query.toLowerCase();
+  const matchedPeople = q ? realUsers.filter((u) => u.uid !== user.uid && (u.name?.toLowerCase().includes(q) || u.role?.toLowerCase().includes(q))) : [];
+
   const filtered = posts.filter((p) => {
-    const q = query.toLowerCase();
     const matchesQuery = !q || p.text.toLowerCase().includes(q) || p.author.name.toLowerCase().includes(q) || p.hashtags.some((h) => h.toLowerCase().includes(q));
     const matchesRegion = !region || regionOf(p.author.place) === region;
     const matchesLang = !spokenLang || AUTHOR_PROFILES[p.author.name]?.spokenLang === spokenLang;
@@ -1410,6 +1478,25 @@ function SearchView({ posts, onOpenChat, onOpenProfile, onAddComment, user }) {
 
       <div className={`h-px mb-4 ${cx.border(dark)} border-t`} />
 
+      {matchedPeople.length > 0 && (
+        <div className="mb-5">
+          <p className={`text-xs font-mono uppercase tracking-wide mb-2 flex items-center gap-1.5 ${cx.faint(dark)}`}>
+            <Users className="h-3.5 w-3.5" /> {t("search_people")}
+          </p>
+          <div className="space-y-2">
+            {matchedPeople.map((p) => (
+              <button key={p.uid} onClick={() => onOpenProfile(p.name, p.uid)} className={`w-full flex items-center gap-3 rounded-xl p-3 border ${cx.surface(dark)}`}>
+                <Avatar name={p.name} imageUrl={p.avatarUrl} available={p.available !== false} />
+                <div className="min-w-0 flex-1 text-left">
+                  <p className="text-sm font-semibold truncate">{p.name}</p>
+                  <p className={`text-xs truncate ${cx.faint(dark)}`}>{p.role}</p>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {filtered.length === 0 ? (
         <p className={`text-sm text-center py-8 ${cx.faint(dark)}`}>{t("search_empty")}</p>
       ) : (
@@ -1424,7 +1511,7 @@ function SearchView({ posts, onOpenChat, onOpenProfile, onAddComment, user }) {
 
 /* ---------------------------- chat ---------------------------- */
 
-function ChatView({ conversations, setConversations, activeId, setActiveId, onOpenProfile, onNotify }) {
+function ChatView({ conversations, onSendMessage, activeId, setActiveId, onOpenProfile, user }) {
   const { t, dark } = useApp();
   const active = conversations.find((c) => c.id === activeId) || conversations[0];
   const [draft, setDraft] = useState("");
@@ -1433,17 +1520,10 @@ function ChatView({ conversations, setConversations, activeId, setActiveId, onOp
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [active?.messages?.length, activeId]);
 
-  function updateConv(id, fn) { setConversations((prev) => prev.map((c) => (c.id === id ? fn(c) : c))); }
   function send() {
     if (!draft.trim() || !active) return;
-    const personName = active.person.name;
-    updateConv(active.id, (c) => ({ ...c, messages: [...c.messages, { id: Date.now(), from: "me", text: draft }] }));
+    onSendMessage(active, draft);
     setDraft("");
-    setTimeout(() => {
-      const reply = AUTO_REPLIES[Math.floor(Math.random() * AUTO_REPLIES.length)];
-      updateConv(active.id, (c) => ({ ...c, messages: [...c.messages, { id: Date.now() + 1, from: "them", ...reply }] }));
-      onNotify?.(tf(t, "notif_reply_template", { name: personName }));
-    }, 1300);
   }
   function toggleTranslate(msgId) { setTranslated((prev) => ({ ...prev, [msgId]: !prev[msgId] })); }
 
@@ -1451,11 +1531,11 @@ function ChatView({ conversations, setConversations, activeId, setActiveId, onOp
 
   return (
     <div className="max-w-4xl mx-auto flex chat-shell">
-      <div className={`w-full md:w-72 shrink-0 border-r ${cx.surface(dark)} ${activeId ? "hidden md:block" : "block"}`}>
+      <div className={`w-full md:w-72 shrink-0 border-r overflow-y-auto ${cx.surface(dark)} ${activeId ? "hidden md:block" : "block"}`}>
         <div className={`p-4 font-mono font-bold text-xs uppercase tracking-wide ${cx.faint(dark)}`}>{t("chat_messages")}</div>
         {conversations.map((c) => (
           <button key={c.id} onClick={() => setActiveId(c.id)} className={`w-full flex items-center gap-3 px-4 py-3 text-left transition ${cx.hover(dark)} ${active.id === c.id ? (dark ? "bg-slate-800" : "bg-indigo-50") : ""}`}>
-            <Avatar name={c.person.name} />
+            <Avatar name={c.person.name} imageUrl={c.person.avatarUrl} />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5">
                 <span className="text-sm font-semibold truncate">{c.person.name}</span>
@@ -1470,18 +1550,18 @@ function ChatView({ conversations, setConversations, activeId, setActiveId, onOp
       <div className={`flex-1 flex flex-col ${dark ? "bg-slate-950" : "bg-slate-50"} ${activeId ? "flex" : "hidden md:flex"}`}>
         <div className={`flex items-center gap-3 p-4 border-b ${cx.surface(dark)}`}>
           <button onClick={() => setActiveId(null)} className={`md:hidden ${cx.muted(dark)}`}><ChevronLeft className="h-5 w-5" /></button>
-          <button onClick={() => onOpenProfile(active.person.name)} className="flex items-center gap-3 hover:opacity-80">
-            <Avatar name={active.person.name} />
+          <button onClick={() => onOpenProfile(active.person.name, active.person.uid)} className="flex items-center gap-3 hover:opacity-80">
+            <Avatar name={active.person.name} imageUrl={active.person.avatarUrl} />
             <div className="text-left">
               <p className="text-sm font-semibold">{active.person.name}</p>
-              <p className={`text-xs ${cx.faint(dark)}`}>{active.person.role} · {active.person.place}</p>
+              {(active.person.role || active.person.place) && <p className={`text-xs ${cx.faint(dark)}`}>{active.person.role} · {active.person.place}</p>}
             </div>
           </button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {active.messages.map((m) => {
-            const isMe = m.from === "me";
+            const isMe = m.from === "me" || m.from === user.uid;
             const showT = translated[m.id];
             return (
               <div key={m.id} className={`flex ${isMe ? "justify-end" : "justify-start"}`}>
@@ -1781,17 +1861,24 @@ function ProjectsView({ projects, onUpdateProject, activeId, setActiveId, onOpen
 
 /* ---------------------------- profile ---------------------------- */
 
-function ProfileView({ subjectName, user, setUser, following, setFollowing, onOpenChat, onBackToMe }) {
+function ProfileView({ subjectName, subjectUid, user, setUser, following, setFollowing, onOpenChat, onBackToMe }) {
   const { t, dark } = useApp();
   const isSelf = !subjectName || subjectName === user.name;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(user);
   const [reported, setReported] = useState(false);
+  const [otherLive, setOtherLive] = useState(null);
   const fileRef = useRef(null);
   const portfolioFileRef = useRef(null);
   const avg = (REVIEWS.reduce((a, r) => a + r.stars, 0) / REVIEWS.length).toFixed(1);
 
-  const other = !isSelf ? (AUTHOR_PROFILES[subjectName] || { role: "", place: "", verified: false, bio: "", looking: [], followers: 0 }) : null;
+  useEffect(() => {
+    if (isSelf || !subjectUid) { setOtherLive(null); return; }
+    const unsub = onSnapshot(doc(db, "users", subjectUid), (snap) => setOtherLive(snap.exists() ? snap.data() : null));
+    return unsub;
+  }, [isSelf, subjectUid]);
+
+  const other = !isSelf ? (otherLive || AUTHOR_PROFILES[subjectName] || { role: "", place: "", verified: false, bio: "", looking: [], followers: 0, portfolio: [] }) : null;
   const shown = isSelf ? user : { name: subjectName, ...other };
   const isFollowing = !isSelf && following.includes(subjectName);
 
@@ -1799,14 +1886,27 @@ function ProfileView({ subjectName, user, setUser, following, setFollowing, onOp
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => setDraft((d) => ({ ...d, avatarUrl: reader.result }));
+    reader.onload = async () => {
+      setDraft((d) => ({ ...d, avatarUrl: reader.result }));
+      try {
+        const url = await uploadImage(reader.result, `avatars/${user.uid}-${Date.now()}.jpg`);
+        setDraft((d) => ({ ...d, avatarUrl: url }));
+      } catch (err) {}
+    };
     reader.readAsDataURL(file);
   }
   function handlePortfolioFile(e) {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => setUser((u) => ({ ...u, portfolio: [...(u.portfolio || []), { id: `pf${Date.now()}`, dataUrl: reader.result }] }));
+    reader.onload = async () => {
+      const id = `pf${Date.now()}`;
+      setUser((u) => ({ ...u, portfolio: [...(u.portfolio || []), { id, dataUrl: reader.result }] }));
+      try {
+        const url = await uploadImage(reader.result, `portfolio/${user.uid}/${id}.jpg`);
+        setUser((u) => ({ ...u, portfolio: (u.portfolio || []).map((item) => (item.id === id ? { ...item, dataUrl: url } : item)) }));
+      } catch (err) {}
+    };
     reader.readAsDataURL(file);
     e.target.value = "";
   }
@@ -1829,7 +1929,7 @@ function ProfileView({ subjectName, user, setUser, following, setFollowing, onOp
         <div className="flex items-start gap-4">
           <div className="relative">
             <Avatar name={editing ? draft.name : shown.name} imageUrl={editing ? draft.avatarUrl : shown.avatarUrl} size="xl"
-              available={isSelf ? user.available !== false : other.available} />
+              available={isSelf ? user.available !== false : other.available !== false} />
             {isSelf && editing && (
               <>
                 <input ref={fileRef} type="file" accept="image/*" onChange={handleFile} className="hidden" />
@@ -1863,7 +1963,7 @@ function ProfileView({ subjectName, user, setUser, following, setFollowing, onOp
                 <span className={`text-xs ${cx.faint(dark)}`}>({REVIEWS.length})</span>
               </span>
               {!isSelf && (
-                <span className={`text-xs ${cx.faint(dark)}`}>· {other.followers.toLocaleString()} {t("profile_followers")}</span>
+                <span className={`text-xs ${cx.faint(dark)}`}>· {(other.followers || 0).toLocaleString()} {t("profile_followers")}</span>
               )}
             </div>
             <div className="flex items-center gap-2 mt-2">
@@ -1874,8 +1974,8 @@ function ProfileView({ subjectName, user, setUser, following, setFollowing, onOp
                 </>
               ) : (
                 <span className="flex items-center gap-1.5 text-xs">
-                  <span className={`h-2 w-2 rounded-full ${other.available ? "bg-teal-500" : "bg-slate-400"}`} />
-                  {other.available ? t("available_now") : t("available_busy")}
+                  <span className={`h-2 w-2 rounded-full ${other.available !== false ? "bg-teal-500" : "bg-slate-400"}`} />
+                  {other.available !== false ? t("available_now") : t("available_busy")}
                 </span>
               )}
             </div>
@@ -1902,7 +2002,7 @@ function ProfileView({ subjectName, user, setUser, following, setFollowing, onOp
         )}
 
         {!isSelf && (
-          <button onClick={() => onOpenChat(subjectName)} className="w-full mt-4 flex items-center justify-center gap-1.5 text-sm font-medium bg-indigo-50 text-indigo-600 rounded-lg py-2 hover:bg-indigo-100">
+          <button onClick={() => onOpenChat(subjectName, subjectUid)} className="w-full mt-4 flex items-center justify-center gap-1.5 text-sm font-medium bg-indigo-50 text-indigo-600 rounded-lg py-2 hover:bg-indigo-100">
             <MessageCircle className="h-4 w-4" /> {t("profile_message")}
           </button>
         )}
@@ -1942,6 +2042,14 @@ function ProfileView({ subjectName, user, setUser, following, setFollowing, onOp
               {(user.portfolio || []).length === 0 && <span className="text-xs text-center leading-tight">{t("portfolio_empty_hint")}</span>}
             </button>
             <input ref={portfolioFileRef} type="file" accept="image/*" onChange={handlePortfolioFile} className="hidden" />
+          </div>
+        ) : other.portfolio && other.portfolio.length > 0 ? (
+          <div className="grid grid-cols-3 gap-2">
+            {other.portfolio.map((item) => (
+              <div key={item.id} className="aspect-square rounded-lg overflow-hidden">
+                <img src={item.dataUrl} alt="" className="w-full h-full object-cover" />
+              </div>
+            ))}
           </div>
         ) : (
           <div className="grid grid-cols-3 gap-2">
@@ -2178,7 +2286,7 @@ function MobileNav({ tab, setTab }) {
 
 function RightRail({ posts, onOpenProfile }) {
   const { t, dark } = useApp();
-  const topAuthors = [...new Map(posts.map((p) => [p.author.name, p.author])).values()].slice(0, 4);
+  const topAuthors = [...new Map(posts.map((p) => [p.author.name, { ...p.author, uid: p.authorUid }])).values()].slice(0, 4);
   return (
     <aside className="hidden lg:block w-72 shrink-0 p-4 pt-5">
       <div className={`border rounded-xl p-4 ${cx.surface(dark)}`}>
@@ -2198,7 +2306,7 @@ function RightRail({ posts, onOpenProfile }) {
         </p>
         <div className="space-y-3">
           {topAuthors.map((a) => (
-            <button key={a.name} onClick={() => onOpenProfile(a.name)} className={`flex items-center gap-2.5 w-full text-left rounded-lg p-1 -m-1 ${cx.hover(dark)}`}>
+            <button key={a.name} onClick={() => onOpenProfile(a.name, a.uid)} className={`flex items-center gap-2.5 w-full text-left rounded-lg p-1 -m-1 ${cx.hover(dark)}`}>
               <Avatar name={a.name} size="sm" />
               <div className="min-w-0">
                 <p className="text-sm font-medium truncate">{a.name}</p>
@@ -2214,17 +2322,17 @@ function RightRail({ posts, onOpenProfile }) {
 
 /* ---------------------------- app ---------------------------- */
 
-const SESSION_KEY = "celiann-session";
-
 export default function App() {
   const [checking, setChecking] = useState(true);
   const [stage, setStage] = useState("auth");
   const [user, setUser] = useState(null);
   const [tab, setTab] = useState("feed");
   const [profileSubject, setProfileSubject] = useState(null);
+  const [profileSubjectUid, setProfileSubjectUid] = useState(null);
   const [following, setFollowing] = useState([]);
   const [posts, setPosts] = useState(INITIAL_POSTS.map((p) => ({ ...p, seed: true })));
-  const [conversations, setConversations] = useState(CONVERSATIONS);
+  const [seedConversations, setSeedConversations] = useState(CONVERSATIONS.map((c) => ({ ...c, seed: true })));
+  const [realChats, setRealChats] = useState([]);
   const [activeConv, setActiveConv] = useState(null);
   const [projects, setProjects] = useState(INITIAL_PROJECTS.map((p) => ({ ...p, seed: true })));
   const [activeProject, setActiveProject] = useState(null);
@@ -2232,11 +2340,14 @@ export default function App() {
   const [viewerIndex, setViewerIndex] = useState(null);
   const [notifications, setNotifications] = useState([]);
   const [showNotifs, setShowNotifs] = useState(false);
+  const [realUsers, setRealUsers] = useState([]);
   const seededCollabNotif = useRef(false);
 
   const [dark, setDark] = useState(false);
   const [lang, setLang] = useState("es");
   const [notifs, setNotifs] = useState({ collab: true, messages: true, mentions: false });
+
+  const conversations = [...realChats, ...seedConversations];
 
   // Local UI preferences only (theme, language, notification toggles) — loaded once.
   useEffect(() => {
@@ -2271,6 +2382,7 @@ export default function App() {
         setStage("auth");
         setTab("feed");
         setProfileSubject(null);
+        setProfileSubjectUid(null);
         setNotifications([]);
       }
       setChecking(false);
@@ -2312,6 +2424,37 @@ export default function App() {
     return unsub;
   }, [user?.uid]);
 
+  // Every registered person, so real users (not just the 6 demo profiles) can be found and messaged.
+  useEffect(() => {
+    if (!user?.uid) { setRealUsers([]); return; }
+    const unsub = onSnapshot(
+      collection(db, "users"),
+      (snap) => setRealUsers(snap.docs.map((d) => ({ uid: d.id, ...d.data() }))),
+      () => setRealUsers([])
+    );
+    return unsub;
+  }, [user?.uid]);
+
+  // Live 1-1 chats that involve me, shared for real between both people.
+  useEffect(() => {
+    if (!user?.uid) { setRealChats([]); return; }
+    const q = query(collection(db, "chats"), where("members", "array-contains", user.uid));
+    const unsub = onSnapshot(
+      q,
+      (snap) => setRealChats(snap.docs.map((d) => {
+        const data = d.data();
+        const otherUid = (data.members || []).find((m) => m !== user.uid);
+        return {
+          id: d.id, seed: false,
+          person: { name: data.memberNames?.[otherUid] || "?", uid: otherUid, avatarUrl: data.memberAvatars?.[otherUid] },
+          messages: data.messages || [],
+        };
+      })),
+      () => setRealChats([])
+    );
+    return unsub;
+  }, [user?.uid]);
+
   // One sample "new collaboration" notification, once per session, so the feature is visible even for a fresh account.
   useEffect(() => {
     if (stage !== "app" || !user || seededCollabNotif.current) return;
@@ -2331,13 +2474,48 @@ export default function App() {
     if (notifs[type] === false) return;
     setNotifications((prev) => [{ id: `n${Date.now()}${Math.random()}`, text, read: false, action }, ...prev]);
   }
-  function handleOpenChat(name) {
-    const conv = conversations.find((c) => c.person.name === name);
+  async function handleOpenChat(name, uid) {
+    if (!uid) {
+      const conv = seedConversations.find((c) => c.person.name === name);
+      setTab("chat");
+      setActiveConv(conv ? conv.id : seedConversations[0]?.id);
+      return;
+    }
+    const chatId = [user.uid, uid].sort().join("_");
+    try {
+      const snap = await getDoc(doc(db, "chats", chatId));
+      if (!snap.exists()) {
+        await setDoc(doc(db, "chats", chatId), {
+          members: [user.uid, uid],
+          memberNames: { [user.uid]: user.name, [uid]: name },
+          memberAvatars: { [user.uid]: user.avatarUrl || null, [uid]: null },
+          messages: [],
+        });
+      }
+    } catch (e) {}
     setTab("chat");
-    setActiveConv(conv ? conv.id : conversations[0].id);
+    setActiveConv(chatId);
   }
-  function handleOpenProfile(name) {
-    setProfileSubject(name === user?.name ? null : name);
+  function handleSendMessage(conv, text) {
+    if (conv.seed) {
+      const personName = conv.person.name;
+      setSeedConversations((prev) => prev.map((c) => (c.id === conv.id ? { ...c, messages: [...c.messages, { id: Date.now(), from: "me", text }] } : c)));
+      setTimeout(() => {
+        const reply = AUTO_REPLIES[Math.floor(Math.random() * AUTO_REPLIES.length)];
+        setSeedConversations((prev) => prev.map((c) => (c.id === conv.id ? { ...c, messages: [...c.messages, { id: Date.now() + 1, from: "them", ...reply }] } : c)));
+        pushNotification("messages", tf(t, "notif_reply_template", { name: personName }), () => setTab("chat"));
+      }, 1300);
+    } else {
+      const msg = { id: Date.now(), from: user.uid, text };
+      updateDoc(doc(db, "chats", conv.id), { messages: arrayUnion(msg) }).catch(() => {});
+    }
+  }
+  function handleOpenProfile(name, uid) {
+    if (name === user?.name) {
+      setProfileSubject(null); setProfileSubjectUid(null);
+    } else {
+      setProfileSubject(name); setProfileSubjectUid(uid || null);
+    }
     setTab("profile");
   }
 
@@ -2397,7 +2575,7 @@ export default function App() {
   }
   function handleNav(id) {
     setTab(id);
-    if (id === "profile") setProfileSubject(null);
+    if (id === "profile") { setProfileSubject(null); setProfileSubjectUid(null); }
   }
   function handleLogout() {
     signOut(auth).catch(() => {});
@@ -2428,7 +2606,7 @@ export default function App() {
 
         {stage === "auth" && <AuthScreen />}
         {stage === "onboarding" && (
-          <OnboardingScreen email={user?.email || ""} onDone={(u) => {
+          <OnboardingScreen email={user?.email || ""} uid={user?.uid} onDone={(u) => {
             const profile = { ...u, uid: user.uid, email: user.email || "" };
             setDoc(doc(db, "users", user.uid), profile).catch(() => {});
             setUser(profile);
@@ -2451,18 +2629,17 @@ export default function App() {
                     <FeedView user={user} posts={posts} onCreatePost={handleCreatePost} onOpenChat={handleOpenChat} onOpenProfile={handleOpenProfile} onAddComment={handleAddComment}
                       stories={stories} setStories={setStories} viewerIndex={viewerIndex} setViewerIndex={setViewerIndex} />
                   )}
-                  {tab === "search" && <SearchView posts={posts} onOpenChat={handleOpenChat} onOpenProfile={handleOpenProfile} onAddComment={handleAddComment} user={user} />}
+                  {tab === "search" && <SearchView posts={posts} realUsers={realUsers} onOpenChat={handleOpenChat} onOpenProfile={handleOpenProfile} onAddComment={handleAddComment} user={user} />}
                   {tab === "chat" && (
-                    <ChatView conversations={conversations} setConversations={setConversations} activeId={activeConv} setActiveId={setActiveConv} onOpenProfile={handleOpenProfile}
-                      onNotify={(text) => pushNotification("messages", text, () => { setTab("chat"); })} />
+                    <ChatView conversations={conversations} onSendMessage={handleSendMessage} activeId={activeConv} setActiveId={setActiveConv} onOpenProfile={handleOpenProfile} user={user} />
                   )}
                   {tab === "projects" && (
                     <ProjectsView projects={projects} onUpdateProject={updateProjectDoc} activeId={activeProject} setActiveId={setActiveProject} onOpenProfile={handleOpenProfile}
                       onNotify={(text) => pushNotification("messages", text, () => { setTab("projects"); })} />
                   )}
                   {tab === "profile" && (
-                    <ProfileView subjectName={profileSubject} user={user} setUser={updateUser} following={following} setFollowing={updateFollowing}
-                      onOpenChat={handleOpenChat} onBackToMe={() => setProfileSubject(null)} />
+                    <ProfileView subjectName={profileSubject} subjectUid={profileSubjectUid} user={user} setUser={updateUser} following={following} setFollowing={updateFollowing}
+                      onOpenChat={handleOpenChat} onBackToMe={() => { setProfileSubject(null); setProfileSubjectUid(null); }} />
                   )}
                   {tab === "settings" && <SettingsView onLogout={handleLogout} />}
                 </main>
