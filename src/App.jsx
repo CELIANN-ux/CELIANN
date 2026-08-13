@@ -862,10 +862,10 @@ function AuthScreen() {
           <div className="relative mb-2.5">
             <Mail className="h-4 w-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder={t("auth_email_placeholder")}
-              className="w-full border border-slate-300 rounded-xl py-2.5 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              className="w-full border border-slate-300 rounded-xl py-2.5 pl-9 pr-3 text-sm text-slate-900 placeholder:text-slate-400 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
           </div>
           <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={t("auth_password_ph")}
-            className="w-full border border-slate-300 rounded-xl py-2.5 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            className="w-full border border-slate-300 rounded-xl py-2.5 px-3 text-sm text-slate-900 placeholder:text-slate-400 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
 
           {mode === "signup" && (
             <label className="flex items-center gap-2 mt-4 text-sm text-slate-600 cursor-pointer select-none">
@@ -955,19 +955,19 @@ function OnboardingScreen({ email, uid, onDone }) {
         <div className="mt-5">
           <label className="text-xs font-mono text-slate-500 uppercase tracking-wide">{t("onboarding_name_label")}</label>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("onboarding_name_ph")}
-            className="w-full border border-slate-300 rounded-lg py-2 px-3 mt-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            className="w-full border border-slate-300 rounded-lg py-2 px-3 mt-1 text-sm text-slate-900 placeholder:text-slate-400 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
         </div>
 
         <div className="mt-4">
           <label className="text-xs font-mono text-slate-500 uppercase tracking-wide">{t("onboarding_role_label")}</label>
           <input value={role} onChange={(e) => setRole(e.target.value)} placeholder={t("onboarding_role_ph")}
-            className="w-full border border-slate-300 rounded-lg py-2 px-3 mt-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            className="w-full border border-slate-300 rounded-lg py-2 px-3 mt-1 text-sm text-slate-900 placeholder:text-slate-400 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
         </div>
 
         <div className="mt-4">
           <label className="text-xs font-mono text-slate-500 uppercase tracking-wide">{t("onboarding_bio_label")}</label>
           <textarea value={bio} onChange={(e) => setBio(e.target.value)} rows={2} placeholder={t("onboarding_bio_ph")}
-            className="w-full border border-slate-300 rounded-lg py-2 px-3 mt-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none" />
+            className="w-full border border-slate-300 rounded-lg py-2 px-3 mt-1 text-sm text-slate-900 placeholder:text-slate-400 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none" />
         </div>
 
         <div className="mt-4">
