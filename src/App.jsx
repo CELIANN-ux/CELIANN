@@ -13,8 +13,7 @@ import {
   doc, getDoc, setDoc, updateDoc, addDoc, collection, query, orderBy, where,
   onSnapshot, arrayUnion, arrayRemove,
 } from "firebase/firestore";
-import { ref as storageRef, uploadString, getDownloadURL } from "firebase/storage";
-import { auth, db, storage, googleProvider } from "./firebase.js";
+import { auth, db, googleProvider } from "./firebase.js";
 
 /* Local-only UI preferences (theme, language, notification toggles) — everything
    else (profile, posts, comments, projects, following) now lives in Firebase. */
@@ -119,6 +118,7 @@ const STRINGS = {
     auth_reset_sent: "Te mandamos un link a tu correo para crear una nueva contraseña.",
     auth_reset_need_email: "Escribe tu correo arriba primero.",
     search_people: "Personas",
+    onboarding_uploading: "Subiendo…",
   },
   en: {
     nav_feed: "Feed", nav_search: "Search", nav_chat: "Chats", nav_profile: "Profile", nav_settings: "Settings",
@@ -203,6 +203,7 @@ const STRINGS = {
     auth_reset_sent: "We sent a link to your email to set a new password.",
     auth_reset_need_email: "Type your email above first.",
     search_people: "People",
+    onboarding_uploading: "Uploading…",
   },
   fr: {
     nav_feed: "Fil", nav_search: "Rechercher", nav_chat: "Messages", nav_profile: "Profil", nav_settings: "Réglages",
@@ -287,6 +288,7 @@ const STRINGS = {
     auth_reset_sent: "On t'a envoyé un lien par e-mail pour créer un nouveau mot de passe.",
     auth_reset_need_email: "Écris d'abord ton e-mail ci-dessus.",
     search_people: "Personnes",
+    onboarding_uploading: "Envoi…",
   },
   pt: {
     nav_feed: "Feed", nav_search: "Buscar", nav_chat: "Chats", nav_profile: "Perfil", nav_settings: "Ajustes",
@@ -371,6 +373,7 @@ const STRINGS = {
     auth_reset_sent: "Enviamos um link para o seu e-mail para criar uma nova senha.",
     auth_reset_need_email: "Digite seu e-mail acima primeiro.",
     search_people: "Pessoas",
+    onboarding_uploading: "Enviando…",
   },
   zh: {
     nav_feed: "动态", nav_search: "搜索", nav_chat: "聊天", nav_profile: "个人主页", nav_settings: "设置",
@@ -455,6 +458,7 @@ const STRINGS = {
     auth_reset_sent: "我们已经把重置密码的链接发送到你的邮箱。",
     auth_reset_need_email: "请先在上面填写你的邮箱。",
     search_people: "用户",
+    onboarding_uploading: "上传中…",
   },
   ko: {
     nav_feed: "피드", nav_search: "검색", nav_chat: "채팅", nav_profile: "프로필", nav_settings: "설정",
@@ -539,6 +543,7 @@ const STRINGS = {
     auth_reset_sent: "새 비밀번호를 설정할 수 있는 링크를 이메일로 보내드렸어요.",
     auth_reset_need_email: "먼저 위에 이메일을 입력해주세요.",
     search_people: "사람",
+    onboarding_uploading: "업로드 중…",
   },
 };
 
@@ -585,13 +590,6 @@ const STATUS_COLORS = {
 };
 
 const AVATAR_COLORS = ["bg-indigo-500", "bg-amber-500", "bg-teal-500", "bg-rose-500", "bg-sky-500", "bg-violet-500"];
-
-/* Uploads a data-URL image (from FileReader) to Firebase Storage and returns its public URL. */
-async function uploadImage(dataUrl, path) {
-  const ref = storageRef(storage, path);
-  await uploadString(ref, dataUrl, "data_url");
-  return getDownloadURL(ref);
-}
 
 function colorFor(name) {
   const sum = [...(name || "?")].reduce((a, c) => a + c.charCodeAt(0), 0);
@@ -907,9 +905,7 @@ function OnboardingScreen({ email, uid, onDone }) {
   const [role, setRole] = useState("");
   const [bio, setBio] = useState("");
   const [looking, setLooking] = useState([]);
-  const [avatarPreview, setAvatarPreview] = useState(null);
   const [avatarUrl, setAvatarUrl] = useState(null);
-  const [uploading, setUploading] = useState(false);
   const fileRef = useRef(null);
 
   function toggleLooking(id) { setLooking((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id])); }
@@ -917,21 +913,10 @@ function OnboardingScreen({ email, uid, onDone }) {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = async () => {
-      setAvatarPreview(reader.result);
-      setUploading(true);
-      try {
-        const url = await uploadImage(reader.result, `avatars/${uid}-${Date.now()}.jpg`);
-        setAvatarUrl(url);
-      } catch (err) {
-        setAvatarUrl(reader.result); // keep working even if Storage isn't reachable
-      } finally {
-        setUploading(false);
-      }
-    };
+    reader.onload = () => setAvatarUrl(reader.result);
     reader.readAsDataURL(file);
   }
-  const canSubmit = name.trim() && role.trim() && looking.length > 0 && !uploading;
+  const canSubmit = name.trim() && role.trim() && looking.length > 0;
 
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
@@ -942,7 +927,7 @@ function OnboardingScreen({ email, uid, onDone }) {
         </p>
 
         <div className="flex items-center gap-4 mt-6">
-          <Avatar name={name || "?"} size="xl" imageUrl={avatarPreview} />
+          <Avatar name={name || "?"} size="xl" imageUrl={avatarUrl} />
           <div>
             <input ref={fileRef} type="file" accept="image/*" onChange={handleFile} className="hidden" />
             <button onClick={() => fileRef.current?.click()} className="flex items-center gap-2 text-sm font-medium text-indigo-600 border border-indigo-200 rounded-lg px-3 py-1.5 hover:bg-indigo-50 transition">
@@ -1886,27 +1871,14 @@ function ProfileView({ subjectName, subjectUid, user, setUser, following, setFol
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = async () => {
-      setDraft((d) => ({ ...d, avatarUrl: reader.result }));
-      try {
-        const url = await uploadImage(reader.result, `avatars/${user.uid}-${Date.now()}.jpg`);
-        setDraft((d) => ({ ...d, avatarUrl: url }));
-      } catch (err) {}
-    };
+    reader.onload = () => setDraft((d) => ({ ...d, avatarUrl: reader.result }));
     reader.readAsDataURL(file);
   }
   function handlePortfolioFile(e) {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = async () => {
-      const id = `pf${Date.now()}`;
-      setUser((u) => ({ ...u, portfolio: [...(u.portfolio || []), { id, dataUrl: reader.result }] }));
-      try {
-        const url = await uploadImage(reader.result, `portfolio/${user.uid}/${id}.jpg`);
-        setUser((u) => ({ ...u, portfolio: (u.portfolio || []).map((item) => (item.id === id ? { ...item, dataUrl: url } : item)) }));
-      } catch (err) {}
-    };
+    reader.onload = () => setUser((u) => ({ ...u, portfolio: [...(u.portfolio || []), { id: `pf${Date.now()}`, dataUrl: reader.result }] }));
     reader.readAsDataURL(file);
     e.target.value = "";
   }
