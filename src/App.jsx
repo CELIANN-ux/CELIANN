@@ -119,6 +119,8 @@ const STRINGS = {
     auth_reset_need_email: "Escribe tu correo arriba primero.",
     search_people: "Personas",
     onboarding_uploading: "Subiendo…",
+    reviews_leave: "Tu reseña", reviews_placeholder: "¿Cómo fue colaborar con esta persona?",
+    reviews_submit: "Publicar reseña", reviews_update: "Actualizar reseña", reviews_empty: "Aún no tiene reseñas.",
   },
   en: {
     nav_feed: "Feed", nav_search: "Search", nav_chat: "Chats", nav_profile: "Profile", nav_settings: "Settings",
@@ -204,6 +206,8 @@ const STRINGS = {
     auth_reset_need_email: "Type your email above first.",
     search_people: "People",
     onboarding_uploading: "Uploading…",
+    reviews_leave: "Your review", reviews_placeholder: "How was collaborating with this person?",
+    reviews_submit: "Post review", reviews_update: "Update review", reviews_empty: "No reviews yet.",
   },
   fr: {
     nav_feed: "Fil", nav_search: "Rechercher", nav_chat: "Messages", nav_profile: "Profil", nav_settings: "Réglages",
@@ -289,6 +293,8 @@ const STRINGS = {
     auth_reset_need_email: "Écris d'abord ton e-mail ci-dessus.",
     search_people: "Personnes",
     onboarding_uploading: "Envoi…",
+    reviews_leave: "Ton avis", reviews_placeholder: "Comment s'est passée la collaboration avec cette personne ?",
+    reviews_submit: "Publier l'avis", reviews_update: "Mettre à jour l'avis", reviews_empty: "Pas encore d'avis.",
   },
   pt: {
     nav_feed: "Feed", nav_search: "Buscar", nav_chat: "Chats", nav_profile: "Perfil", nav_settings: "Ajustes",
@@ -374,6 +380,8 @@ const STRINGS = {
     auth_reset_need_email: "Digite seu e-mail acima primeiro.",
     search_people: "Pessoas",
     onboarding_uploading: "Enviando…",
+    reviews_leave: "Sua avaliação", reviews_placeholder: "Como foi colaborar com essa pessoa?",
+    reviews_submit: "Publicar avaliação", reviews_update: "Atualizar avaliação", reviews_empty: "Ainda sem avaliações.",
   },
   zh: {
     nav_feed: "动态", nav_search: "搜索", nav_chat: "聊天", nav_profile: "个人主页", nav_settings: "设置",
@@ -459,6 +467,8 @@ const STRINGS = {
     auth_reset_need_email: "请先在上面填写你的邮箱。",
     search_people: "用户",
     onboarding_uploading: "上传中…",
+    reviews_leave: "你的评价", reviews_placeholder: "和这个人合作感觉怎么样？",
+    reviews_submit: "发布评价", reviews_update: "更新评价", reviews_empty: "暂时还没有评价。",
   },
   ko: {
     nav_feed: "피드", nav_search: "검색", nav_chat: "채팅", nav_profile: "프로필", nav_settings: "설정",
@@ -544,6 +554,8 @@ const STRINGS = {
     auth_reset_need_email: "먼저 위에 이메일을 입력해주세요.",
     search_people: "사람",
     onboarding_uploading: "업로드 중…",
+    reviews_leave: "내 리뷰", reviews_placeholder: "이 사람과의 협업은 어땠나요?",
+    reviews_submit: "리뷰 등록", reviews_update: "리뷰 수정", reviews_empty: "아직 리뷰가 없어요.",
   },
 };
 
@@ -763,6 +775,19 @@ function availabilityFor(name, user) {
   if (!user) return undefined;
   if (name === user.name) return user.available !== false;
   return AUTHOR_PROFILES[name]?.available;
+}
+
+function StarPicker({ value, onChange }) {
+  const [hover, setHover] = useState(0);
+  return (
+    <div className="flex gap-1">
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button key={n} type="button" onMouseEnter={() => setHover(n)} onMouseLeave={() => setHover(0)} onClick={() => onChange(n)}>
+          <Star className={`h-5 w-5 ${(hover || value) >= n ? "fill-amber-400 text-amber-400" : "text-slate-300"}`} />
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function StatusChip({ status }) {
@@ -1853,15 +1878,48 @@ function ProfileView({ subjectName, subjectUid, user, setUser, following, setFol
   const [draft, setDraft] = useState(user);
   const [reported, setReported] = useState(false);
   const [otherLive, setOtherLive] = useState(null);
+  const [liveReviews, setLiveReviews] = useState([]);
+  const [myStars, setMyStars] = useState(0);
+  const [myReviewText, setMyReviewText] = useState("");
   const fileRef = useRef(null);
   const portfolioFileRef = useRef(null);
-  const avg = (REVIEWS.reduce((a, r) => a + r.stars, 0) / REVIEWS.length).toFixed(1);
 
   useEffect(() => {
     if (isSelf || !subjectUid) { setOtherLive(null); return; }
     const unsub = onSnapshot(doc(db, "users", subjectUid), (snap) => setOtherLive(snap.exists() ? snap.data() : null));
     return unsub;
   }, [isSelf, subjectUid]);
+
+  // Real reviews for a real profile (yours or someone else's); the 6 demo people keep their static sample reviews.
+  const reviewTargetUid = isSelf ? user.uid : subjectUid;
+  useEffect(() => {
+    if (!reviewTargetUid) { setLiveReviews([]); return; }
+    const q = query(collection(db, "reviews"), where("targetUid", "==", reviewTargetUid));
+    const unsub = onSnapshot(q, (snap) => setLiveReviews(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), () => setLiveReviews([]));
+    return unsub;
+  }, [reviewTargetUid]);
+  useEffect(() => {
+    if (isSelf || !reviewTargetUid) return;
+    const mine = liveReviews.find((r) => r.fromUid === user.uid);
+    setMyStars(mine ? mine.stars : 0);
+    setMyReviewText(mine ? mine.text : "");
+  }, [liveReviews, isSelf, reviewTargetUid, user.uid]);
+
+  const usingLiveReviews = !!reviewTargetUid;
+  const reviewsToShow = usingLiveReviews ? liveReviews : REVIEWS;
+  const avg = reviewsToShow.length ? (reviewsToShow.reduce((a, r) => a + r.stars, 0) / reviewsToShow.length).toFixed(1) : "—";
+
+  async function submitReview() {
+    if (myStars === 0 || !subjectUid) return;
+    const reviewId = `${user.uid}_${subjectUid}`;
+    try {
+      await setDoc(doc(db, "reviews", reviewId), {
+        targetUid: subjectUid, targetName: subjectName,
+        fromUid: user.uid, fromName: user.name,
+        stars: myStars, text: myReviewText, createdAt: new Date().toISOString(),
+      });
+    } catch (e) {}
+  }
 
   const other = !isSelf ? (otherLive || AUTHOR_PROFILES[subjectName] || { role: "", place: "", verified: false, bio: "", looking: [], followers: 0, portfolio: [] }) : null;
   const shown = isSelf ? user : { name: subjectName, ...other };
@@ -1932,7 +1990,7 @@ function ProfileView({ subjectName, subjectUid, user, setUser, following, setFol
               <span className="flex items-center gap-1">
                 <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
                 <span className="text-sm font-medium">{avg}</span>
-                <span className={`text-xs ${cx.faint(dark)}`}>({REVIEWS.length})</span>
+                <span className={`text-xs ${cx.faint(dark)}`}>({reviewsToShow.length})</span>
               </span>
               {!isSelf && (
                 <span className={`text-xs ${cx.faint(dark)}`}>· {(other.followers || 0).toLocaleString()} {t("profile_followers")}</span>
@@ -2040,10 +2098,13 @@ function ProfileView({ subjectName, subjectUid, user, setUser, following, setFol
       <div className="mt-5">
         <p className={`text-xs font-mono uppercase tracking-wide mb-2 ${cx.faint(dark)}`}>{t("profile_reviews")}</p>
         <div className="space-y-2">
-          {REVIEWS.map((r) => (
+          {reviewsToShow.length === 0 && usingLiveReviews && (
+            <p className={`text-sm ${cx.faint(dark)}`}>{t("reviews_empty")}</p>
+          )}
+          {reviewsToShow.map((r) => (
             <div key={r.id} className={`border rounded-xl p-3.5 ${cx.surface(dark)}`}>
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">{r.name}</span>
+                <span className="text-sm font-medium">{r.name || r.fromName}</span>
                 <span className="flex items-center gap-0.5">
                   {Array.from({ length: 5 }).map((_, i) => (
                     <Star key={i} className={`h-3.5 w-3.5 ${i < r.stars ? "fill-amber-400 text-amber-400" : cx.border(dark)}`} />
@@ -2054,6 +2115,19 @@ function ProfileView({ subjectName, subjectUid, user, setUser, following, setFol
             </div>
           ))}
         </div>
+
+        {!isSelf && subjectUid && (
+          <div className={`mt-3 border rounded-xl p-3.5 ${cx.surfaceAlt(dark)}`}>
+            <p className="text-xs font-mono uppercase tracking-wide mb-2">{t("reviews_leave")}</p>
+            <StarPicker value={myStars} onChange={setMyStars} />
+            <input value={myReviewText} onChange={(e) => setMyReviewText(e.target.value)} placeholder={t("reviews_placeholder")}
+              className={`w-full mt-2 rounded-lg py-2 px-3 text-sm border focus:outline-none focus:ring-2 focus:ring-indigo-500 ${cx.input(dark)}`} />
+            <button disabled={myStars === 0} onClick={submitReview}
+              className="w-full mt-2 flex items-center justify-center gap-1.5 text-sm font-medium bg-indigo-600 disabled:bg-slate-300 text-white rounded-lg py-2 hover:bg-indigo-700">
+              {liveReviews.some((r) => r.fromUid === user.uid) ? t("reviews_update") : t("reviews_submit")}
+            </button>
+          </div>
+        )}
       </div>
 
       {isSelf ? (
