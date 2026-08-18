@@ -771,10 +771,35 @@ function Avatar({ name, size = "md", imageUrl, ring = false, available }) {
     </span>
   );
 }
-function availabilityFor(name, user) {
+function availabilityFor(name, user, usersByUid, uid) {
   if (!user) return undefined;
   if (name === user.name) return user.available !== false;
+  if (uid && usersByUid?.[uid]) return usersByUid[uid].available !== false;
   return AUTHOR_PROFILES[name]?.available;
+}
+
+/* "hace 3 h" / "3 hours ago" / etc, switching to an actual date after 7 days — fully localized via Intl. */
+function formatRelativeTime(isoString, lang) {
+  if (!isoString) return "";
+  const date = new Date(isoString);
+  if (isNaN(date.getTime())) return "";
+  const locale = lang || "es";
+  const now = new Date();
+  const diffSec = Math.round((date - now) / 1000);
+  const diffDays = Math.round(diffSec / 86400);
+
+  if (Math.abs(diffDays) >= 7) {
+    const opts = date.getFullYear() !== now.getFullYear() ? { day: "numeric", month: "short", year: "numeric" } : { day: "numeric", month: "short" };
+    try { return new Intl.DateTimeFormat(locale, opts).format(date); } catch (e) { return new Intl.DateTimeFormat("es", opts).format(date); }
+  }
+  let rtf;
+  try { rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto" }); } catch (e) { rtf = new Intl.RelativeTimeFormat("es", { numeric: "auto" }); }
+  const diffMin = Math.round(diffSec / 60);
+  const diffHour = Math.round(diffSec / 3600);
+  if (Math.abs(diffSec) < 60) return rtf.format(0, "second");
+  if (Math.abs(diffMin) < 60) return rtf.format(diffMin, "minute");
+  if (Math.abs(diffHour) < 24) return rtf.format(diffHour, "hour");
+  return rtf.format(diffDays, "day");
 }
 
 function StarPicker({ value, onChange }) {
@@ -1258,22 +1283,30 @@ function Composer({ user, onPost }) {
   );
 }
 
-function PostCard({ post, onOpenChat, onOpenProfile, onAddComment, user, matches }) {
-  const { t, dark } = useApp();
-  const [liked, setLiked] = useState(false);
-  const [likes, setLikes] = useState(post.likes);
+function PostCard({ post, onOpenChat, onOpenProfile, onAddComment, onToggleLike, user, matches, realUsersByUid }) {
+  const { t, dark, lang } = useApp();
   const [showComments, setShowComments] = useState(false);
   const [showShare, setShowShare] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [seedLiked, setSeedLiked] = useState(false);
+  const [seedLikes, setSeedLikes] = useState(post.likes);
   const [draft, setDraft] = useState("");
   const shareRef = useRef(null);
   const Icon = catIcon(post.category);
   const shareText = `${post.text}\n\n— ${post.author.name} en CELIANN\nceliann.app/p/${post.id}`;
+  const authorProfile = post.authorUid ? realUsersByUid?.[post.authorUid] : null;
+  const timeLabel = post.seed ? post.createdAgo : formatRelativeTime(post.createdAt, lang);
+  const iLiked = post.seed ? seedLiked : (post.likedBy || []).includes(user.uid);
+  const likeCount = post.seed ? seedLikes : (post.likedBy || []).length;
 
   function submitComment() {
     if (!draft.trim()) return;
     onAddComment(post.id, draft);
     setDraft("");
+  }
+  function toggleLike() {
+    if (post.seed) { setSeedLiked(!seedLiked); setSeedLikes(seedLikes + (seedLiked ? -1 : 1)); return; }
+    onToggleLike(post, iLiked);
   }
   function copyShare() {
     const done = () => { setCopied(true); setTimeout(() => setCopied(false), 2000); };
@@ -1292,13 +1325,13 @@ function PostCard({ post, onOpenChat, onOpenProfile, onAddComment, user, matches
     <div className={`border rounded-xl p-4 mb-4 ${cx.surface(dark)}`}>
       <div className="flex items-start gap-3">
         <button onClick={() => onOpenProfile(post.author.name, post.authorUid)} className="shrink-0">
-          <Avatar name={post.author.name} available={availabilityFor(post.author.name, user)} />
+          <Avatar name={post.author.name} imageUrl={authorProfile?.avatarUrl} available={availabilityFor(post.author.name, user, realUsersByUid, post.authorUid)} />
         </button>
         <div className="flex-1 min-w-0">
           <button onClick={() => onOpenProfile(post.author.name, post.authorUid)} className="flex items-center gap-1.5 flex-wrap hover:underline">
             <span className="font-semibold text-sm">{post.author.name}</span>
             {post.author.verified && <BadgeCheck className="h-4 w-4 text-teal-500" />}
-            <span className={`text-xs no-underline ${cx.faint(dark)}`}>· {post.createdAgo}</span>
+            <span className={`text-xs no-underline ${cx.faint(dark)}`}>· {timeLabel}</span>
           </button>
           <p className={`text-xs ${cx.muted(dark)}`}>{post.author.role} · {post.author.place}</p>
         </div>
@@ -1329,10 +1362,11 @@ function PostCard({ post, onOpenChat, onOpenProfile, onAddComment, user, matches
       </div>
 
       <div className={`flex items-center gap-4 mt-3 pt-3 border-t ${cx.border(dark)}`}>
-        <button onClick={() => { setLiked(!liked); setLikes(likes + (liked ? -1 : 1)); }}
-          className={`flex items-center gap-1.5 text-sm ${liked ? "text-rose-500" : cx.faint(dark)} hover:text-rose-500 transition`}>
-          <Heart className="h-4 w-4" fill={liked ? "currentColor" : "none"} /> {likes}
+        <button onClick={toggleLike}
+          className={`flex items-center gap-1.5 text-sm ${iLiked ? "text-rose-500" : cx.faint(dark)} hover:text-rose-500 transition`}>
+          <Heart className="h-4 w-4" fill={iLiked ? "currentColor" : "none"} /> {likeCount}
         </button>
+
         <button onClick={() => setShowComments((s) => !s)} className={`flex items-center gap-1.5 text-sm ${showComments ? "text-indigo-600" : cx.faint(dark)} hover:text-indigo-600 transition`}>
           <MessageSquare className="h-4 w-4" /> {post.comments.length}
         </button>
@@ -1383,7 +1417,7 @@ function PostCard({ post, onOpenChat, onOpenProfile, onAddComment, user, matches
   );
 }
 
-function FeedView({ user, posts, onCreatePost, onOpenChat, onOpenProfile, onAddComment, stories, setStories, viewerIndex, setViewerIndex }) {
+function FeedView({ user, posts, onCreatePost, onOpenChat, onOpenProfile, onAddComment, onToggleLike, realUsersByUid, stories, setStories, viewerIndex, setViewerIndex }) {
   const sorted = [...posts].sort((a, b) => {
     const aMatch = user.looking?.includes(a.category) ? 0 : 1;
     const bMatch = user.looking?.includes(b.category) ? 0 : 1;
@@ -1394,7 +1428,7 @@ function FeedView({ user, posts, onCreatePost, onOpenChat, onOpenProfile, onAddC
       <StoryBar stories={stories} setStories={setStories} viewerIndex={viewerIndex} setViewerIndex={setViewerIndex} />
       <Composer user={user} onPost={onCreatePost} />
       {sorted.map((p) => (
-        <PostCard key={p.id} post={p} onOpenChat={onOpenChat} onOpenProfile={onOpenProfile} onAddComment={onAddComment} user={user}
+        <PostCard key={p.id} post={p} onOpenChat={onOpenChat} onOpenProfile={onOpenProfile} onAddComment={onAddComment} onToggleLike={onToggleLike} user={user} realUsersByUid={realUsersByUid}
           matches={user.looking?.includes(p.category)} />
       ))}
     </div>
@@ -1403,7 +1437,7 @@ function FeedView({ user, posts, onCreatePost, onOpenChat, onOpenProfile, onAddC
 
 /* ---------------------------- search ---------------------------- */
 
-function SearchView({ posts, realUsers, onOpenChat, onOpenProfile, onAddComment, user }) {
+function SearchView({ posts, realUsers, realUsersByUid, onOpenChat, onOpenProfile, onAddComment, onToggleLike, user }) {
   const { t, dark } = useApp();
   const [query, setQuery] = useState("");
   const [cat, setCat] = useState(null);
@@ -1511,7 +1545,7 @@ function SearchView({ posts, realUsers, onOpenChat, onOpenProfile, onAddComment,
         <p className={`text-sm text-center py-8 ${cx.faint(dark)}`}>{t("search_empty")}</p>
       ) : (
         filtered.map((p) => (
-          <PostCard key={p.id} post={p} onOpenChat={onOpenChat} onOpenProfile={onOpenProfile} onAddComment={onAddComment} user={user}
+          <PostCard key={p.id} post={p} onOpenChat={onOpenChat} onOpenProfile={onOpenProfile} onAddComment={onAddComment} onToggleLike={onToggleLike} user={user} realUsersByUid={realUsersByUid}
             matches={user.looking?.includes(p.category)} />
         ))
       )}
@@ -1521,7 +1555,7 @@ function SearchView({ posts, realUsers, onOpenChat, onOpenProfile, onAddComment,
 
 /* ---------------------------- chat ---------------------------- */
 
-function ChatView({ conversations, onSendMessage, activeId, setActiveId, onOpenProfile, user }) {
+function ChatView({ conversations, onSendMessage, activeId, setActiveId, onOpenProfile, user, realUsersByUid }) {
   const { t, dark } = useApp();
   const active = conversations.find((c) => c.id === activeId) || conversations[0];
   const [draft, setDraft] = useState("");
@@ -1536,6 +1570,7 @@ function ChatView({ conversations, onSendMessage, activeId, setActiveId, onOpenP
     setDraft("");
   }
   function toggleTranslate(msgId) { setTranslated((prev) => ({ ...prev, [msgId]: !prev[msgId] })); }
+  function avatarFor(person) { return person.uid ? realUsersByUid?.[person.uid]?.avatarUrl : person.avatarUrl; }
 
   if (!active) return null;
 
@@ -1545,7 +1580,7 @@ function ChatView({ conversations, onSendMessage, activeId, setActiveId, onOpenP
         <div className={`p-4 font-mono font-bold text-xs uppercase tracking-wide ${cx.faint(dark)}`}>{t("chat_messages")}</div>
         {conversations.map((c) => (
           <button key={c.id} onClick={() => setActiveId(c.id)} className={`w-full flex items-center gap-3 px-4 py-3 text-left transition ${cx.hover(dark)} ${active.id === c.id ? (dark ? "bg-slate-800" : "bg-indigo-50") : ""}`}>
-            <Avatar name={c.person.name} imageUrl={c.person.avatarUrl} />
+            <Avatar name={c.person.name} imageUrl={avatarFor(c.person)} />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5">
                 <span className="text-sm font-semibold truncate">{c.person.name}</span>
@@ -1561,7 +1596,7 @@ function ChatView({ conversations, onSendMessage, activeId, setActiveId, onOpenP
         <div className={`flex items-center gap-3 p-4 border-b ${cx.surface(dark)}`}>
           <button onClick={() => setActiveId(null)} className={`md:hidden ${cx.muted(dark)}`}><ChevronLeft className="h-5 w-5" /></button>
           <button onClick={() => onOpenProfile(active.person.name, active.person.uid)} className="flex items-center gap-3 hover:opacity-80">
-            <Avatar name={active.person.name} imageUrl={active.person.avatarUrl} />
+            <Avatar name={active.person.name} imageUrl={avatarFor(active.person)} />
             <div className="text-left">
               <p className="text-sm font-semibold">{active.person.name}</p>
               {(active.person.role || active.person.place) && <p className={`text-xs ${cx.faint(dark)}`}>{active.person.role} · {active.person.place}</p>}
@@ -2330,7 +2365,7 @@ function MobileNav({ tab, setTab }) {
   );
 }
 
-function RightRail({ posts, onOpenProfile }) {
+function RightRail({ posts, onOpenProfile, realUsersByUid }) {
   const { t, dark } = useApp();
   const topAuthors = [...new Map(posts.map((p) => [p.author.name, { ...p.author, uid: p.authorUid }])).values()].slice(0, 4);
   return (
@@ -2353,7 +2388,7 @@ function RightRail({ posts, onOpenProfile }) {
         <div className="space-y-3">
           {topAuthors.map((a) => (
             <button key={a.name} onClick={() => onOpenProfile(a.name, a.uid)} className={`flex items-center gap-2.5 w-full text-left rounded-lg p-1 -m-1 ${cx.hover(dark)}`}>
-              <Avatar name={a.name} size="sm" />
+              <Avatar name={a.name} size="sm" imageUrl={a.uid ? realUsersByUid?.[a.uid]?.avatarUrl : undefined} />
               <div className="min-w-0">
                 <p className="text-sm font-medium truncate">{a.name}</p>
                 <p className={`text-xs truncate ${cx.faint(dark)}`}>{a.place}</p>
@@ -2394,6 +2429,8 @@ export default function App() {
   const [notifs, setNotifs] = useState({ collab: true, messages: true, mentions: false });
 
   const conversations = [...realChats, ...seedConversations];
+  const realUsersByUid = {};
+  for (const u of realUsers) realUsersByUid[u.uid] = u;
 
   // Local UI preferences only (theme, language, notification toggles) — loaded once.
   useEffect(() => {
@@ -2492,7 +2529,7 @@ export default function App() {
         const otherUid = (data.members || []).find((m) => m !== user.uid);
         return {
           id: d.id, seed: false,
-          person: { name: data.memberNames?.[otherUid] || "?", uid: otherUid, avatarUrl: data.memberAvatars?.[otherUid] },
+          person: { name: data.memberNames?.[otherUid] || "?", uid: otherUid },
           messages: data.messages || [],
         };
       })),
@@ -2534,7 +2571,6 @@ export default function App() {
         await setDoc(doc(db, "chats", chatId), {
           members: [user.uid, uid],
           memberNames: { [user.uid]: user.name, [uid]: name },
-          memberAvatars: { [user.uid]: user.avatarUrl || null, [uid]: null },
           messages: [],
         });
       }
@@ -2599,9 +2635,9 @@ export default function App() {
     }
   }
   async function handleCreatePost(post) {
-    const { id, ...rest } = post;
+    const { id, createdAgo, ...rest } = post;
     try {
-      const ref = await addDoc(collection(db, "posts"), { ...rest, authorUid: user.uid, createdAt: new Date().toISOString() });
+      const ref = await addDoc(collection(db, "posts"), { ...rest, authorUid: user.uid, createdAt: new Date().toISOString(), likedBy: [] });
       setTimeout(async () => {
         const others = Object.keys(AUTHOR_PROFILES).filter((n) => n !== user.name);
         const name = others[Math.floor(Math.random() * others.length)];
@@ -2611,8 +2647,13 @@ export default function App() {
         pushNotification("mentions", tf(t, "notif_comment_template", { name }));
       }, 5000);
     } catch (e) {
-      setPosts((prev) => [{ ...post, seed: false }, ...prev]);
+      setPosts((prev) => [{ ...post, seed: false, likedBy: [] }, ...prev]);
     }
+  }
+  async function handleToggleLike(post, currentlyLiked) {
+    try {
+      await updateDoc(doc(db, "posts", post.id), { likedBy: currentlyLiked ? arrayRemove(user.uid) : arrayUnion(user.uid) });
+    } catch (e) {}
   }
   function handleOpenNotif(n) {
     setNotifications((prev) => prev.map((x) => (x.id === n.id ? { ...x, read: true } : x)));
@@ -2673,11 +2714,12 @@ export default function App() {
                 <main className="flex-1 min-w-0">
                   {tab === "feed" && (
                     <FeedView user={user} posts={posts} onCreatePost={handleCreatePost} onOpenChat={handleOpenChat} onOpenProfile={handleOpenProfile} onAddComment={handleAddComment}
+                      onToggleLike={handleToggleLike} realUsersByUid={realUsersByUid}
                       stories={stories} setStories={setStories} viewerIndex={viewerIndex} setViewerIndex={setViewerIndex} />
                   )}
-                  {tab === "search" && <SearchView posts={posts} realUsers={realUsers} onOpenChat={handleOpenChat} onOpenProfile={handleOpenProfile} onAddComment={handleAddComment} user={user} />}
+                  {tab === "search" && <SearchView posts={posts} realUsers={realUsers} realUsersByUid={realUsersByUid} onOpenChat={handleOpenChat} onOpenProfile={handleOpenProfile} onAddComment={handleAddComment} onToggleLike={handleToggleLike} user={user} />}
                   {tab === "chat" && (
-                    <ChatView conversations={conversations} onSendMessage={handleSendMessage} activeId={activeConv} setActiveId={setActiveConv} onOpenProfile={handleOpenProfile} user={user} />
+                    <ChatView conversations={conversations} onSendMessage={handleSendMessage} activeId={activeConv} setActiveId={setActiveConv} onOpenProfile={handleOpenProfile} user={user} realUsersByUid={realUsersByUid} />
                   )}
                   {tab === "projects" && (
                     <ProjectsView projects={projects} onUpdateProject={updateProjectDoc} activeId={activeProject} setActiveId={setActiveProject} onOpenProfile={handleOpenProfile}
@@ -2689,7 +2731,7 @@ export default function App() {
                   )}
                   {tab === "settings" && <SettingsView onLogout={handleLogout} />}
                 </main>
-                {(tab === "feed" || tab === "search") && <RightRail posts={posts} onOpenProfile={handleOpenProfile} />}
+                {(tab === "feed" || tab === "search") && <RightRail posts={posts} onOpenProfile={handleOpenProfile} realUsersByUid={realUsersByUid} />}
               </div>
             </div>
             {showNotifs && <NotificationsPanel notifications={notifications} onClose={() => setShowNotifs(false)} onClickItem={handleOpenNotif} />}
